@@ -141,34 +141,62 @@ func (ph *Handler) GetSLIValue(metric string, start string, end string, customFi
 		return 0, err
 	}
 
-	// replace query params
+	// replace query params (e.g., $PROJECT, $STAGE, $SERVICE ...)
 	timeseriesQueryString = ph.replaceQueryParameters(timeseriesQueryString)
 
-	// split query string by first occurance of "?"
-	timeseriesIdentifier := strings.Split(timeseriesQueryString, "?")[0]
+	// split query string by first occurrence of "?"
+	timeseriesSplit := strings.Split(timeseriesQueryString, "?")
 
-	timeseriesIdentifierEncoded := url.QueryEscape(timeseriesIdentifier)
+	timeseriesIdentifier := ""
 
-	timeseriesQueryString = strings.Replace(timeseriesQueryString, timeseriesIdentifier, timeseriesIdentifierEncoded, 1)
+	timeseriesQueryParams := ""
 
-	fmt.Printf("Old=%s, new=%s\n", timeseriesIdentifier, timeseriesIdentifierEncoded)
+	// support the old format with "timeseriesIdentifier:someFilters()?scope=..." as well as the new format with
+	// "?etricSelector=timeseriesIdentifier&entitySelector=...&scope=..."
+	if len(timeseriesSplit) == 1 {
+		// new format without "?" -> everything within the query string are query parameters
+		timeseriesQueryParams = timeseriesSplit[0]
+	} else {
+		// old format with "?" - everything left of the ? is the identifier, everything right are query params
+		timeseriesIdentifier = timeseriesSplit[0]
 
-	targetUrl := ph.ApiURL + fmt.Sprintf("/api/v2/metrics/query/")
-
-	queryParams := map[string]string{
-		"metricSelector": timeseriesQueryString,
-		"resolution":     "Inf", // resolution=Inf means that we only get 1 datapoint (per service)
-		"from":           timestampToString(startUnix),
-		"to":             timestampToString(endUnix),
+		// build the new query
+		timeseriesQueryParams = fmt.Sprintf("metricSelector=%s&%s", timeseriesSplit[0], timeseriesSplit[1])
 	}
+
+	targetUrl := ph.ApiURL + fmt.Sprintf("/api/v2/metrics/query/?%s", timeseriesQueryParams)
+
+	// default query params that are required: resolution, from and to
+	queryParams := map[string]string{
+		"resolution": "Inf", // resolution=Inf means that we only get 1 datapoint (per service)
+		"from":       timestampToString(startUnix),
+		"to":         timestampToString(endUnix),
+	}
+	fmt.Println("Query Params initially:")
 	fmt.Println(queryParams)
 
-	// append queryParams to URL
+	// append queryParams to targetUrl
 	u, _ := url.Parse(targetUrl)
 	q, _ := url.ParseQuery(u.RawQuery)
 
 	for param, value := range queryParams {
 		q.Add(param, value)
+	}
+
+	// check if q contains "scope"
+	scopeData := q.Get("scope")
+
+	if scopeData != "" {
+		// scope is no longer supported in the new API, it needs to be called "entitySelector" and contain type(SERVICE)
+		if !strings.Contains(scopeData, "type(SERVICE)") {
+			scopeData = fmt.Sprintf("%s,type(SERVICE)", scopeData)
+		}
+		q.Add("entitySelector", scopeData)
+	}
+
+	// check timeseriesIdentifier
+	if timeseriesIdentifier == "" {
+		timeseriesIdentifier = q.Get("metricSelector")
 	}
 
 	u.RawQuery = q.Encode()
@@ -231,7 +259,7 @@ func (ph *Handler) GetSLIValue(metric string, start string, end string, customFi
 			metricIdExists = true
 
 			if len(i.Data) != 1 {
-				return 0, fmt.Errorf("Dynatrace Metrics API returned %d result values, expected 1", len(i.Data))
+				return 0, fmt.Errorf("Dynatrace Metrics API returned %d result values, expected 1. Please ensure the response contains exactly one value (e.g., by using :merge(0):avg for the metric)", len(i.Data))
 			}
 
 			actualMetricValue = i.Data[0].Values[0]
@@ -285,6 +313,7 @@ func (ph *Handler) getTimeseriesConfig(metric string) (string, error) {
 	// default config
 	switch metric {
 	case Throughput:
+		// ?metricSelector=builtin:service.requestCount.total:merge(0):count&
 		return "builtin:service.requestCount.total:merge(0):count?scope=tag(keptn_project:$PROJECT),tag(keptn_stage:$STAGE),tag(keptn_service:$SERVICE),tag(keptn_deployment:$DEPLOYMENT)", nil
 	case ErrorRate:
 		return "builtin:service.errors.total.count:merge(0):avg?scope=tag(keptn_project:$PROJECT),tag(keptn_stage:$STAGE),tag(keptn_service:$SERVICE),tag(keptn_deployment:$DEPLOYMENT)", nil

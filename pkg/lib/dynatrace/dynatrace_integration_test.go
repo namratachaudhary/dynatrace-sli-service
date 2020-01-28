@@ -99,7 +99,7 @@ func TestGetSLIValueWithEmptyResult(t *testing.T) {
 	end := time.Unix(1571649085, 0).UTC().Format(time.RFC3339)
 	value, err := dh.GetSLIValue(ResponseTimeP50, start, end, nil)
 
-	assert.EqualValues(t, errors.New("Dynatrace Metrics API returned 0 result values, expected 1"), err)
+	assert.EqualValues(t, errors.New("Dynatrace Metrics API returned 0 result values, expected 1. Please ensure the response contains exactly one value (e.g., by using :merge(0):avg for the metric)"), err)
 
 	assert.EqualValues(t, 0.0, value)
 }
